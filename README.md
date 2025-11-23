@@ -2,6 +2,8 @@
 
 A web-based visualization tool for exploring cross-references between AGENTS.md and CLAUDE.md files in your repositories.
 
+🌐 **[Try it online](https://proalexusc.github.io/agentlink-visualizer/)** - No installation required!
+
 ## Features
 
 - **Efficient file browsing** - Uses File System Access API (Chrome/Edge required)
@@ -18,7 +20,7 @@ A web-based visualization tool for exploring cross-references between AGENTS.md 
 
 1. Clone this repository:
    ```bash
-   git clone <your-repo-url>
+   git clone https://github.com/ProAlexUSC/agentlink-visualizer.git
    cd agentlink-visualizer
    ```
 
@@ -60,16 +62,16 @@ The app parses `@path/to/file` references and creates an interactive graph showi
 
 ### GitHub Pages (Free)
 
-1. Build the app:
-   ```bash
-   pnpm run build
-   ```
+This repository is configured with **automatic deployment** via GitHub Actions.
 
-2. Deploy to GitHub Pages:
-   - Push your code to GitHub
-   - Go to repository Settings > Pages
-   - Set source to "GitHub Actions" or deploy the `dist` folder
-   - Your app will be available at `https://<username>.github.io/<repo-name>/`
+**Live Demo**: https://proalexusc.github.io/agentlink-visualizer/
+
+Every push to the `main` branch automatically:
+1. Installs dependencies
+2. Builds the production bundle
+3. Deploys to GitHub Pages
+
+You can fork this repository and it will automatically deploy to your own GitHub Pages.
 
 ### Other Platforms
 
@@ -93,6 +95,7 @@ This app requires a browser that supports the **File System Access API**:
 - React 19.2
 - TypeScript 5.8
 - Vite 6.2
+- Tailwind CSS 4.1 (with PostCSS)
 - D3.js 7.9 (force-directed graph visualization)
 - Lucide React (icons)
 - File System Access API
