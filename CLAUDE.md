@@ -52,3 +52,4 @@ Path resolution supports absolute (`@/path`), explicit relative (`@./path`, `@..
 ## Deployment
 
 GitHub Pages deployment is configured via `.github/workflows/`. The `base` path in `vite.config.ts` is set to `/agentlink-visualizer/` for production builds.
+- USE English for comment and code

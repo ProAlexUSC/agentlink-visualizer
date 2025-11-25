@@ -1,72 +1,101 @@
-import { AgentFile, FileTreeNode, GraphLink, GraphNode } from '../types';
+import { AgentFile, FileTreeNode, GraphLink, GraphNode } from "../types";
+import { FILE_TYPES, ParseMode } from "../constants";
+
+// Regex patterns for link extraction (compiled once for performance)
+const LINK_PATTERNS = {
+  // [[wiki-style]] links (legacy AGENTS.md format)
+  wikiLink: /\[\[(.*?)\]\]/g,
+  // `@/path/to/file` or `@./path` (backtick wrapped)
+  backtickAtLink: /`(@[\/\.]?[a-zA-Z0-9_\-\.\/]+)`/g,
+  // @path without backticks
+  atLink: /(?:^|[\s:])(@[\/\.]?[a-zA-Z0-9_\-\.\/]+)/gm,
+  // `path/to/file.md` without @ prefix
+  backtickPath: /`([a-zA-Z0-9_\-\.\/]+\.(md|ts|js|json|yaml|yml))`/g,
+} as const;
 
 /**
- * Resolves a path relative to the source file.
+ * Resolve a link path relative to the source file location
+ * Supports: absolute (/path), explicit relative (./path, ../path), and implicit root (path)
  */
 const resolvePath = (sourcePath: string, linkPath: string): string => {
-  // Strip leading @ if present (CLAUDE.md style)
-  let cleanLink = linkPath.startsWith('@') ? linkPath.slice(1) : linkPath;
-  cleanLink = cleanLink.trim();
+  // Strip leading @ if present
+  const cleanLink = linkPath.startsWith("@")
+    ? linkPath.slice(1).trim()
+    : linkPath.trim();
 
-  // 1. Absolute path (from project root)
-  // e.g., @/src/main.ts or /src/main.ts
-  if (cleanLink.startsWith('/')) {
+  // Absolute path from project root (e.g., /src/main.ts)
+  if (cleanLink.startsWith("/")) {
     return cleanLink.slice(1);
   }
 
-  // 2. Explicit Relative path
-  // e.g., @./utils.ts or @../config.json
-  if (cleanLink.startsWith('.')) {
-    const sourceDir = sourcePath.substring(0, sourcePath.lastIndexOf('/'));
-    const sourceParts = sourceDir ? sourceDir.split('/') : [];
-    const linkParts = cleanLink.split('/');
-
-    const resultParts = [...sourceParts];
-
-    for (const part of linkParts) {
-      if (part === '.') continue;
-      if (part === '..') {
-        if (resultParts.length > 0) {
-          resultParts.pop();
-        }
-      } else {
-        resultParts.push(part);
-      }
-    }
-    return resultParts.join('/');
+  // Explicit relative path (e.g., ./utils.ts or ../config.json)
+  if (cleanLink.startsWith(".")) {
+    return resolveRelativePath(sourcePath, cleanLink);
   }
 
-  // 3. Implicit Root Relative (Common in CLAUDE.md)
-  // e.g., @src/utils/logger.ts -> src/utils/logger.ts
-  // If it doesn't start with . or /, we assume it's from root
+  // Implicit root relative (e.g., src/utils/logger.ts)
   return cleanLink;
 };
 
 /**
- * Parses content to find @path links.
+ * Resolve a relative path (starting with . or ..) against a source path
+ */
+const resolveRelativePath = (sourcePath: string, relativePath: string): string => {
+  const sourceDir = sourcePath.substring(0, sourcePath.lastIndexOf("/"));
+  const sourceParts = sourceDir ? sourceDir.split("/") : [];
+  const linkParts = relativePath.split("/");
+
+  const resultParts = [...sourceParts];
+
+  for (const part of linkParts) {
+    if (part === ".") continue;
+    if (part === "..") {
+      resultParts.pop();
+    } else {
+      resultParts.push(part);
+    }
+  }
+
+  return resultParts.join("/");
+};
+
+/**
+ * Reset all regex patterns (required for global flag)
+ */
+const resetPatterns = (): void => {
+  Object.values(LINK_PATTERNS).forEach((pattern) => {
+    pattern.lastIndex = 0;
+  });
+};
+
+/**
+ * Extract all links from markdown content
+ * Supports wiki-style [[links]] and @path references
  */
 export const extractLinks = (content: string): string[] => {
   const links: string[] = [];
+  resetPatterns();
 
-  // Support [[wiki-style]] (legacy Agent.md)
-  const wikiRegex = /\[\[(.*?)\]\]/g;
+  // Wiki-style links: [[path/to/file]]
   let match;
-  while ((match = wikiRegex.exec(content)) !== null) {
+  while ((match = LINK_PATTERNS.wikiLink.exec(content)) !== null) {
     links.push(match[1]);
   }
 
-  // Support @file/path/style (CLAUDE.md)
-  // Pattern 1: `@/path/to/file` or `@./path` or `@../path` (backtick wrapped)
-  const backtickRegex = /`(@[\/\.]?[a-zA-Z0-9_\-\.\/]+)`/g;
-  while ((match = backtickRegex.exec(content)) !== null) {
+  // Backtick-wrapped @links: `@/path/to/file`
+  while ((match = LINK_PATTERNS.backtickAtLink.exec(content)) !== null) {
     links.push(match[1]);
   }
 
-  // Pattern 2: @path without backticks (word boundary or whitespace before)
-  // Supports: @/path, @./path, @../path, @path
-  const atRegex = /(?:^|[\s:])(@[\/\.]?[a-zA-Z0-9_\-\.\/]+)/gm;
-  while ((match = atRegex.exec(content)) !== null) {
-    // Avoid duplicates from backtick matches
+  // Plain @links (avoid duplicates from backtick matches)
+  while ((match = LINK_PATTERNS.atLink.exec(content)) !== null) {
+    if (!links.includes(match[1])) {
+      links.push(match[1]);
+    }
+  }
+
+  // Backtick-wrapped paths without @: `specs/auth/spec.md`
+  while ((match = LINK_PATTERNS.backtickPath.exec(content)) !== null) {
     if (!links.includes(match[1])) {
       links.push(match[1]);
     }
@@ -76,135 +105,200 @@ export const extractLinks = (content: string): string[] => {
 };
 
 /**
- * Builds a node and link list for D3 visualization.
- * @param files All files in the repo
- * @param parseTarget The filename to look for links in (e.g. 'CLAUDE.md' or 'AGENTS.md')
+ * Check if a file is an allowed type for graph parsing
  */
-export const buildGraphData = (files: AgentFile[], parseTarget: 'CLAUDE.md' | 'AGENTS.md') => {
-  // 1. Identify valid nodes
-  // Nodes include:
-  // - ONLY files that exactly match parseTarget.
-  // - Other files (like .ts, .json) are explicitly filtered out from the graph
-  
-  const fileMap = new Map(files.map(f => [f.path, f]));
+const isAllowedFileType = (fileName: string): boolean => {
+  const lowerName = fileName.toLowerCase();
+  return FILE_TYPES.ALLOWED_TYPES.some(
+    (type) => lowerName === type.toLowerCase()
+  );
+};
+
+/**
+ * Check if a file is in the root directory
+ */
+const isRootFile = (file: AgentFile): boolean => {
+  return !file.directory || file.directory === "";
+};
+
+/**
+ * Check if a file should be excluded from the graph (root file of non-selected mode)
+ */
+const shouldExcludeFile = (file: AgentFile, parseTarget: ParseMode): boolean => {
+  if (!isRootFile(file)) return false;
+
+  const fileName = file.name.toLowerCase();
+  const isAgentOrClaude =
+    fileName === "claude.md" || fileName === "agents.md";
+
+  return isAgentOrClaude && fileName !== parseTarget.toLowerCase();
+};
+
+/**
+ * Try to find a target file in the file map
+ * Supports exact match and fuzzy match with .md extension
+ */
+const findTargetFile = (
+  resolvedPath: string,
+  fileMap: Map<string, AgentFile>
+): AgentFile | undefined => {
+  // Try exact match first
+  const exactMatch = fileMap.get(resolvedPath);
+  if (exactMatch) return exactMatch;
+
+  // Try with .md extension
+  return Array.from(fileMap.values()).find(
+    (f) => f.path === resolvedPath || f.path === `${resolvedPath}.md`
+  );
+};
+
+/**
+ * Build graph data (nodes and links) from agent files
+ */
+export const buildGraphData = (
+  files: AgentFile[],
+  parseTarget: ParseMode
+): { nodes: GraphNode[]; links: GraphLink[] } => {
+  const fileMap = new Map(files.map((f) => [f.path, f]));
   const nodesMap = new Map<string, GraphNode>();
   const links: GraphLink[] = [];
+  const linkSet = new Set<string>();
 
-  // Helper to get or create node
-  const getOrCreateNode = (file: AgentFile, isSource: boolean) => {
-    if (!nodesMap.has(file.path)) {
-      nodesMap.set(file.path, {
-        id: file.path,
-        name: file.directory ? `${file.directory.split('/').pop()}/${file.name}` : file.name,
-        group: 1,
-        file: file,
-        val: isSource ? 2 : 1, // Larger start size for sources
-      });
-    }
-    return nodesMap.get(file.path)!;
+  // Create or get a node for a file
+  const getOrCreateNode = (file: AgentFile, isSource: boolean): GraphNode => {
+    const existingNode = nodesMap.get(file.path);
+    if (existingNode) return existingNode;
+
+    const isRootOfTarget =
+      isRootFile(file) &&
+      file.name.toLowerCase() === parseTarget.toLowerCase();
+
+    const displayName = file.directory
+      ? `${file.directory.split("/").pop()}/${file.name}`
+      : file.name;
+
+    const node: GraphNode = {
+      id: file.path,
+      name: displayName,
+      group: 1,
+      file,
+      val: isSource ? 2 : 1,
+      isRoot: isRootOfTarget,
+    };
+
+    nodesMap.set(file.path, node);
+    return node;
   };
 
-  files.forEach(sourceFile => {
-    // Only process the selected file type (e.g., CLAUDE.md or AGENTS.md)
-    if (sourceFile.name.toLowerCase() !== parseTarget.toLowerCase()) return;
+  // Process each source file
+  for (const sourceFile of files) {
+    // Only process CLAUDE.md and AGENTS.md files
+    if (!isAllowedFileType(sourceFile.name)) continue;
 
-    // Skip files without loaded content
-    if (!sourceFile.content) return;
+    // Skip root file of non-selected mode
+    if (shouldExcludeFile(sourceFile, parseTarget)) continue;
 
-    // Create the node for this file
+    // Skip files without content
+    if (!sourceFile.content) continue;
+
     const sourceNode = getOrCreateNode(sourceFile, true);
-
     const rawLinks = extractLinks(sourceFile.content);
-    
-    rawLinks.forEach(rawLink => {
+
+    for (const rawLink of rawLinks) {
       const resolvedPath = resolvePath(sourceFile.path, rawLink);
-      
-      // Try to find exact match in files
-      let target = fileMap.get(resolvedPath);
+      const target = findTargetFile(resolvedPath, fileMap);
 
-      // Fuzzy match logic for extensions (though usually we want exact md match here)
-      if (!target) {
-        target = Array.from(fileMap.values()).find(f => 
-          f.path === resolvedPath || 
-          f.path === `${resolvedPath}.md`
-        );
-      }
+      if (!target) continue;
 
-      if (target) {
-        // STRICT FILTER: Only add the target to the graph if it is ALSO of the same type.
-        // e.g. CLAUDE.md -> server.ts (IGNORE)
-        // e.g. CLAUDE.md -> nested/CLAUDE.md (KEEP)
-        if (target.name !== parseTarget) {
-          return; 
-        }
+      // Only allow .md files as targets
+      if (!target.name.toLowerCase().endsWith(".md")) continue;
 
-        // Ensure target node exists
-        const targetNode = getOrCreateNode(target, false);
+      // Skip excluded files
+      if (shouldExcludeFile(target, parseTarget)) continue;
 
-        // Avoid self-loops
-        if (sourceFile.path !== target.path) {
-          links.push({
-            source: sourceFile.path,
-            target: target.path
-          });
-          
-          sourceNode.val += 1;
-          targetNode.val += 1;
-        }
-      }
-    });
-  });
+      // Avoid self-loops
+      if (sourceFile.path === target.path) continue;
 
-  return { 
-    nodes: Array.from(nodesMap.values()), 
-    links 
+      // Avoid duplicate links
+      const linkKey = `${sourceFile.path}->${target.path}`;
+      if (linkSet.has(linkKey)) continue;
+
+      linkSet.add(linkKey);
+      const targetNode = getOrCreateNode(target, false);
+
+      links.push({
+        source: sourceFile.path,
+        target: target.path,
+      });
+
+      // Increase node values based on connections
+      sourceNode.val += 1;
+      targetNode.val += 1;
+    }
+  }
+
+  return {
+    nodes: Array.from(nodesMap.values()),
+    links,
   };
 };
 
 /**
- * Converts a flat list of files into a nested tree structure.
+ * Build a hierarchical file tree from a flat list of files
  */
 export const buildFileTree = (files: AgentFile[]): FileTreeNode[] => {
   const root: FileTreeNode[] = [];
 
-  files.forEach(file => {
-    const parts = file.path.split('/');
+  for (const file of files) {
+    const parts = file.path.split("/");
     let currentLevel = root;
 
     parts.forEach((part, index) => {
       const isFile = index === parts.length - 1;
-      const existingPath = currentLevel.find(n => n.name === part && n.type === (isFile ? 'file' : 'directory'));
+      const nodeType = isFile ? "file" : "directory";
+      const existingNode = currentLevel.find(
+        (n) => n.name === part && n.type === nodeType
+      );
 
-      if (existingPath) {
-        if (!isFile) {
-          currentLevel = existingPath.children!;
+      if (existingNode) {
+        if (!isFile && existingNode.children) {
+          currentLevel = existingNode.children;
         }
       } else {
         const newNode: FileTreeNode = {
           name: part,
-          path: parts.slice(0, index + 1).join('/'),
-          type: isFile ? 'file' : 'directory',
+          path: parts.slice(0, index + 1).join("/"),
+          type: nodeType,
           children: isFile ? undefined : [],
-          fileData: isFile ? file : undefined
+          fileData: isFile ? file : undefined,
         };
         currentLevel.push(newNode);
-        if (!isFile) {
-          currentLevel = newNode.children!;
+
+        if (!isFile && newNode.children) {
+          currentLevel = newNode.children;
         }
       }
     });
+  }
+
+  sortFileTree(root);
+  return root;
+};
+
+/**
+ * Sort file tree nodes: directories first, then alphabetically
+ */
+const sortFileTree = (nodes: FileTreeNode[]): void => {
+  nodes.sort((a, b) => {
+    if (a.type !== b.type) {
+      return a.type === "directory" ? -1 : 1;
+    }
+    return a.name.localeCompare(b.name);
   });
 
-  const sortNodes = (nodes: FileTreeNode[]) => {
-    nodes.sort((a, b) => {
-      if (a.type === b.type) return a.name.localeCompare(b.name);
-      return a.type === 'directory' ? -1 : 1;
-    });
-    nodes.forEach(node => {
-      if (node.children) sortNodes(node.children);
-    });
-  };
-
-  sortNodes(root);
-  return root;
+  for (const node of nodes) {
+    if (node.children) {
+      sortFileTree(node.children);
+    }
+  }
 };

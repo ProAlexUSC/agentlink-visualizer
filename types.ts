@@ -1,30 +1,64 @@
-import * as d3 from 'd3';
+import * as d3 from "d3";
 
+// Re-export File System API types
+import "./types/fileSystem";
+
+/**
+ * Represents a markdown file found in the repository
+ */
 export interface AgentFile {
+  /** Relative path from repository root */
   path: string;
+  /** File name (e.g., "CLAUDE.md") */
   name: string;
-  content?: string;  // Optional for lazy loading
+  /** File content (loaded lazily) */
+  content?: string;
+  /** Parent directory path */
   directory: string;
-  fileHandle?: FileSystemFileHandle;  // For File System Access API
+  /** File System Access API handle for lazy loading */
+  fileHandle?: FileSystemFileHandle;
 }
 
+/**
+ * Graph node representing a file in the visualization
+ */
 export interface GraphNode extends d3.SimulationNodeDatum {
-  id: string; // path
+  /** Unique identifier (file path) */
+  id: string;
+  /** Display name shown in the graph */
   name: string;
+  /** Group for clustering (currently unused) */
   group: number;
+  /** Associated file data */
   file: AgentFile;
-  val: number; // size based on connections
+  /** Node size based on connection count */
+  val: number;
+  /** Whether this is a root-level file */
+  isRoot: boolean;
 }
 
+/**
+ * Graph link representing a reference between files
+ */
 export interface GraphLink extends d3.SimulationLinkDatum<GraphNode> {
+  /** Source node ID or reference */
   source: string | GraphNode;
+  /** Target node ID or reference */
   target: string | GraphNode;
 }
 
+/**
+ * File tree node for the sidebar explorer
+ */
 export interface FileTreeNode {
+  /** Display name */
   name: string;
+  /** Full path */
   path: string;
-  type: 'file' | 'directory';
+  /** Node type */
+  type: "file" | "directory";
+  /** Child nodes (for directories) */
   children?: FileTreeNode[];
+  /** Associated file data (for files) */
   fileData?: AgentFile;
 }

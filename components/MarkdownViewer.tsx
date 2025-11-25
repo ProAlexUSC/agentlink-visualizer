@@ -33,7 +33,11 @@ export const MarkdownViewer: React.FC<MarkdownViewerProps> = ({ file }) => {
 			<div className="flex-1 overflow-y-auto p-6">
 				{!file.content ? (
 					<div className="flex flex-col items-center justify-center h-full text-gray-500">
-						<p className="text-lg font-medium">Loading content...</p>
+						<div className="flex items-center space-x-3">
+							<div className="w-5 h-5 border-2 border-gray-600 border-t-blue-500 rounded-full animate-spin"></div>
+							<p className="text-lg font-medium">Loading content...</p>
+						</div>
+						<p className="text-sm mt-2 text-gray-600">{file.path}</p>
 					</div>
 				) : (
 					<article className="prose prose-invert prose-sm max-w-none prose-headings:text-blue-300 prose-a:text-blue-400 prose-code:text-orange-300 prose-code:bg-gray-800 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none prose-pre:bg-gray-800 prose-pre:border prose-pre:border-gray-700 prose-blockquote:border-blue-500 prose-blockquote:bg-gray-800/50 prose-blockquote:py-1 prose-strong:text-gray-200 prose-li:marker:text-gray-500">

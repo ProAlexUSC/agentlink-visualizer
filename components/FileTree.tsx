@@ -8,12 +8,13 @@ interface FileTreeProps {
   selectedPath?: string;
 }
 
-const FileTreeNodeItem: React.FC<{ 
-  node: FileTreeNode; 
+const FileTreeNodeItem: React.FC<{
+  node: FileTreeNode;
   onSelect: (file: AgentFile) => void;
-  selectedPath?: string; 
-  level: number; 
+  selectedPath?: string;
+  level: number;
 }> = ({ node, onSelect, selectedPath, level }) => {
+  // Expand all levels by default
   const [isOpen, setIsOpen] = useState(true);
   const isSelected = node.type === 'file' && node.fileData?.path === selectedPath;
 
