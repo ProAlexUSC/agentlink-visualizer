@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { FolderOpen, GitBranch, Eye } from "lucide-react";
 import { FileTree } from "./components/FileTree";
 import { GraphView } from "./components/GraphView";
@@ -102,6 +102,36 @@ const App: React.FC = () => {
 	const [selectedFile, setSelectedFile] = useState<AgentFile | null>(null);
 	const [parseTarget, setParseTarget] = useState<ParseMode>("CLAUDE.md");
 	const [scanStatus, setScanStatus] = useState<string>("");
+	const [sidebarWidth, setSidebarWidth] = useState(600);
+	const isResizing = useRef(false);
+
+	// 拖动调整右侧面板大小
+	const handleMouseDown = useCallback(() => {
+		isResizing.current = true;
+		document.body.style.cursor = "col-resize";
+		document.body.style.userSelect = "none";
+	}, []);
+
+	useEffect(() => {
+		const handleMouseMove = (e: MouseEvent) => {
+			if (!isResizing.current) return;
+			const newWidth = window.innerWidth - e.clientX;
+			setSidebarWidth(Math.max(300, Math.min(newWidth, window.innerWidth - 400)));
+		};
+
+		const handleMouseUp = () => {
+			isResizing.current = false;
+			document.body.style.cursor = "";
+			document.body.style.userSelect = "";
+		};
+
+		document.addEventListener("mousemove", handleMouseMove);
+		document.addEventListener("mouseup", handleMouseUp);
+		return () => {
+			document.removeEventListener("mousemove", handleMouseMove);
+			document.removeEventListener("mouseup", handleMouseUp);
+		};
+	}, []);
 
 	// Check browser compatibility
 	useEffect(() => {
@@ -439,8 +469,17 @@ const App: React.FC = () => {
 					)}
 				</main>
 
+				{/* Resizable Divider */}
+				<div
+					onMouseDown={handleMouseDown}
+					className="w-1 bg-gray-800 hover:bg-blue-500 cursor-col-resize transition-colors shrink-0"
+				/>
+
 				{/* Right Sidebar: Content Viewer */}
-				<aside className="w-96 bg-gray-900 border-l border-gray-800 flex flex-col shadow-xl z-10">
+				<aside
+					style={{ width: sidebarWidth }}
+					className="bg-gray-900 border-l border-gray-800 flex flex-col shadow-xl z-10 shrink-0"
+				>
 					<MarkdownViewer file={selectedFile} />
 				</aside>
 			</div>

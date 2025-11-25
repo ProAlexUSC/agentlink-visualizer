@@ -22,21 +22,22 @@ export const GraphView: React.FC<GraphViewProps> = ({ nodes, links, onNodeClick,
     nodesRef.current = nodes;
   }, [nodes]);
 
-  // Handle resize
+  // Handle resize with ResizeObserver
   useEffect(() => {
-    const handleResize = () => {
-      if (wrapperRef.current) {
-        setDimensions({
-          width: wrapperRef.current.offsetWidth,
-          height: wrapperRef.current.offsetHeight
-        });
+    if (!wrapperRef.current) return;
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        if (width > 0 && height > 0) {
+          setDimensions({ width, height });
+        }
       }
-    };
+    });
 
-    window.addEventListener('resize', handleResize);
-    handleResize();
+    resizeObserver.observe(wrapperRef.current);
 
-    return () => window.removeEventListener('resize', handleResize);
+    return () => resizeObserver.disconnect();
   }, []);
 
   // Center on selected node
@@ -93,12 +94,19 @@ export const GraphView: React.FC<GraphViewProps> = ({ nodes, links, onNodeClick,
     svg.call(zoom);
     zoomRef.current = zoom;
 
-    // Force Simulation
+    // Force Simulation - 根据容器大小动态调整力参数
+    const scale = Math.min(width, height) / 600; // 基准大小 600px
+    const linkDistance = Math.max(60, 150 * scale);
+    const chargeStrength = Math.min(-100, -300 * scale);
+    const collideRadius = (d: any) => Math.sqrt(d.val) * 6 * scale + 20;
+
     const simulation = d3.forceSimulation(nodes)
-      .force("link", d3.forceLink(links).id((d: any) => d.id).distance(150))
-      .force("charge", d3.forceManyBody().strength(-300))
+      .force("link", d3.forceLink(links).id((d: any) => d.id).distance(linkDistance))
+      .force("charge", d3.forceManyBody().strength(chargeStrength))
       .force("center", d3.forceCenter(width / 2, height / 2))
-      .force("collide", d3.forceCollide().radius((d: any) => Math.sqrt(d.val) * 8 + 30).iterations(2));
+      .force("collide", d3.forceCollide().radius(collideRadius).iterations(2))
+      .force("x", d3.forceX(width / 2).strength(0.1))
+      .force("y", d3.forceY(height / 2).strength(0.1));
 
     // Draw Links
     const link = g.append("g")
