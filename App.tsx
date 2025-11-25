@@ -8,10 +8,100 @@ import { AgentFile } from "./types";
 
 type ParseMode = "CLAUDE.md" | "AGENTS.md";
 
+// Parse .gitignore content into patterns
+const parseGitignore = (content: string): string[] => {
+	return content
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => line && !line.startsWith("#"));
+};
+
+// Check if a path matches gitignore pattern
+const matchesGitignorePattern = (
+	path: string,
+	pattern: string,
+	isDirectory: boolean
+): boolean => {
+	// Handle negation patterns (we skip them for simplicity)
+	if (pattern.startsWith("!")) return false;
+
+	// Remove trailing slash for directory-only patterns
+	const dirOnly = pattern.endsWith("/");
+	let cleanPattern = dirOnly ? pattern.slice(0, -1) : pattern;
+
+	// If pattern is directory-only but entry is a file, no match
+	if (dirOnly && !isDirectory) return false;
+
+	// Handle patterns starting with /
+	const isRooted = cleanPattern.startsWith("/");
+	if (isRooted) {
+		cleanPattern = cleanPattern.slice(1);
+	}
+
+	// Convert gitignore pattern to regex
+	let regexStr = cleanPattern
+		.replace(/\./g, "\\.") // Escape dots
+		.replace(/\*\*/g, "{{GLOBSTAR}}") // Temp placeholder for **
+		.replace(/\*/g, "[^/]*") // * matches anything except /
+		.replace(/\?/g, "[^/]") // ? matches single char except /
+		.replace(/\{\{GLOBSTAR\}\}/g, ".*"); // ** matches everything
+
+	// If pattern doesn't contain /, it can match at any level
+	if (!cleanPattern.includes("/") && !isRooted) {
+		regexStr = `(^|.*/)?${regexStr}$`;
+	} else if (isRooted) {
+		regexStr = `^${regexStr}$`;
+	} else {
+		regexStr = `(^|/)${regexStr}$`;
+	}
+
+	try {
+		const regex = new RegExp(regexStr);
+		return regex.test(path);
+	} catch {
+		return false;
+	}
+};
+
+// Check if path should be ignored based on gitignore patterns
+const shouldIgnore = (
+	relativePath: string,
+	isDirectory: boolean,
+	gitignorePatterns: Map<string, string[]>
+): boolean => {
+	// Check patterns from root to current directory
+	for (const [ignoreDir, patterns] of gitignorePatterns) {
+		// Only apply patterns from parent directories
+		if (
+			relativePath.startsWith(ignoreDir) ||
+			ignoreDir === "" ||
+			relativePath === ignoreDir
+		) {
+			const pathRelativeToIgnore = ignoreDir
+				? relativePath.slice(ignoreDir.length + 1)
+				: relativePath;
+
+			for (const pattern of patterns) {
+				if (
+					matchesGitignorePattern(
+						pathRelativeToIgnore,
+						pattern,
+						isDirectory
+					)
+				) {
+					return true;
+				}
+			}
+		}
+	}
+	return false;
+};
+
 const App: React.FC = () => {
 	const [files, setFiles] = useState<AgentFile[]>([]);
 	const [selectedFile, setSelectedFile] = useState<AgentFile | null>(null);
 	const [parseTarget, setParseTarget] = useState<ParseMode>("CLAUDE.md");
+	const [scanStatus, setScanStatus] = useState<string>("");
 
 	// Check browser compatibility
 	useEffect(() => {
@@ -31,14 +121,33 @@ const App: React.FC = () => {
 		[files, parseTarget]
 	);
 
+	// Directories to always skip (even if not in .gitignore)
+	const ALWAYS_SKIP_DIRS = new Set([".git", ".svn", ".hg"]);
+
 	// Recursively scan directory for AGENTS.md and CLAUDE.md files
 	const scanDirectory = async (
 		dirHandle: FileSystemDirectoryHandle,
-		relativePath: string
+		relativePath: string,
+		gitignorePatterns: Map<string, string[]>
 	): Promise<AgentFile[]> => {
 		const foundFiles: AgentFile[] = [];
 
 		try {
+			// First, check for .gitignore in this directory
+			try {
+				const gitignoreHandle = await dirHandle.getFileHandle(
+					".gitignore"
+				);
+				const gitignoreFile = await gitignoreHandle.getFile();
+				const gitignoreContent = await gitignoreFile.text();
+				const patterns = parseGitignore(gitignoreContent);
+				if (patterns.length > 0) {
+					gitignorePatterns.set(relativePath, patterns);
+				}
+			} catch {
+				// No .gitignore in this directory, continue
+			}
+
 			// @ts-ignore - values() method exists in File System Access API
 			for await (const entry of dirHandle.values()) {
 				const entryPath = relativePath
@@ -49,19 +158,34 @@ const App: React.FC = () => {
 					const fileName = entry.name.toLowerCase();
 					// Only process AGENTS.md and CLAUDE.md files
 					if (fileName === "agents.md" || fileName === "claude.md") {
-						foundFiles.push({
-							path: entryPath,
-							name: entry.name,
-							directory: relativePath,
-							fileHandle: entry as FileSystemFileHandle,
-							// Note: content is NOT loaded here (lazy loading)
-						});
+						// Check gitignore (though unlikely for these files)
+						if (
+							!shouldIgnore(entryPath, false, gitignorePatterns)
+						) {
+							foundFiles.push({
+								path: entryPath,
+								name: entry.name,
+								directory: relativePath,
+								fileHandle: entry as FileSystemFileHandle,
+							});
+						}
 					}
 				} else if (entry.kind === "directory") {
+					// Always skip version control directories
+					if (ALWAYS_SKIP_DIRS.has(entry.name)) {
+						continue;
+					}
+
+					// Check if directory should be ignored by .gitignore
+					if (shouldIgnore(entryPath, true, gitignorePatterns)) {
+						continue;
+					}
+
 					// Recursively scan subdirectories
 					const subFiles = await scanDirectory(
 						entry as FileSystemDirectoryHandle,
-						entryPath
+						entryPath,
+						gitignorePatterns
 					);
 					foundFiles.push(...subFiles);
 				}
@@ -79,8 +203,17 @@ const App: React.FC = () => {
 			// @ts-ignore - File System Access API may not be in all TypeScript versions
 			const dirHandle = await window.showDirectoryPicker();
 
-			// Scan directory tree
-			const foundFiles = await scanDirectory(dirHandle, "");
+			setScanStatus("Scanning...");
+
+			// Scan directory tree with gitignore support
+			const gitignorePatterns = new Map<string, string[]>();
+			const foundFiles = await scanDirectory(
+				dirHandle,
+				"",
+				gitignorePatterns
+			);
+
+			setScanStatus("");
 
 			if (foundFiles.length > 0) {
 				setFiles(foundFiles);
@@ -94,6 +227,7 @@ const App: React.FC = () => {
 				);
 			}
 		} catch (err: any) {
+			setScanStatus("");
 			if (err.name !== "AbortError") {
 				console.error("Failed to access folder:", err);
 				alert("Failed to access folder. Please try again.");
@@ -199,9 +333,15 @@ const App: React.FC = () => {
 				</div>
 
 				<div className="flex items-center space-x-3">
+					{scanStatus && (
+						<span className="text-xs text-gray-400 animate-pulse">
+							{scanStatus}
+						</span>
+					)}
 					<button
 						onClick={handleSelectFolder}
-						className="flex items-center space-x-2 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded text-sm font-medium cursor-pointer transition-colors"
+						disabled={!!scanStatus}
+						className="flex items-center space-x-2 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded text-sm font-medium cursor-pointer transition-colors"
 					>
 						<FolderOpen size={14} />
 						<span>Select Local Folder</span>
@@ -259,7 +399,7 @@ const App: React.FC = () => {
 								</div>
 							</div>
 
-							<div className="flex-1 overflow-hidden bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-gray-800/20 via-gray-900 to-gray-900">
+							<div className="flex-1 overflow-hidden bg-[radial-gradient(ellipse_at_center,var(--tw-gradient-stops))] from-gray-800/20 via-gray-900 to-gray-900">
 								<GraphView
 									nodes={graphData.nodes}
 									links={graphData.links}
@@ -270,7 +410,7 @@ const App: React.FC = () => {
 							</div>
 						</>
 					) : (
-						<div className="flex-1 flex items-center justify-center bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-gray-800/20 via-gray-900 to-gray-900">
+						<div className="flex-1 flex items-center justify-center bg-[radial-gradient(ellipse_at_center,var(--tw-gradient-stops))] from-gray-800/20 via-gray-900 to-gray-900">
 							<div className="text-center space-y-4 max-w-md px-6">
 								<FolderOpen
 									className="mx-auto text-gray-600"

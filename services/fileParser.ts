@@ -47,7 +47,7 @@ const resolvePath = (sourcePath: string, linkPath: string): string => {
  */
 export const extractLinks = (content: string): string[] => {
   const links: string[] = [];
-  
+
   // Support [[wiki-style]] (legacy Agent.md)
   const wikiRegex = /\[\[(.*?)\]\]/g;
   let match;
@@ -56,11 +56,20 @@ export const extractLinks = (content: string): string[] => {
   }
 
   // Support @file/path/style (CLAUDE.md)
-  // Captures @ followed by path characters. 
-  // Stops at whitespace, quotes, parens, or end of line.
-  const atRegex = /(?:^|\s)@([a-zA-Z0-9_\-\.\/]+)/g; 
-  while ((match = atRegex.exec(content)) !== null) {
+  // Pattern 1: `@/path/to/file` or `@./path` or `@../path` (backtick wrapped)
+  const backtickRegex = /`(@[\/\.]?[a-zA-Z0-9_\-\.\/]+)`/g;
+  while ((match = backtickRegex.exec(content)) !== null) {
     links.push(match[1]);
+  }
+
+  // Pattern 2: @path without backticks (word boundary or whitespace before)
+  // Supports: @/path, @./path, @../path, @path
+  const atRegex = /(?:^|[\s:])(@[\/\.]?[a-zA-Z0-9_\-\.\/]+)/gm;
+  while ((match = atRegex.exec(content)) !== null) {
+    // Avoid duplicates from backtick matches
+    if (!links.includes(match[1])) {
+      links.push(match[1]);
+    }
   }
 
   return links;
@@ -90,8 +99,6 @@ export const buildGraphData = (files: AgentFile[], parseTarget: 'CLAUDE.md' | 'A
         group: 1,
         file: file,
         val: isSource ? 2 : 1, // Larger start size for sources
-        x: 0, 
-        y: 0
       });
     }
     return nodesMap.get(file.path)!;

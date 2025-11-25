@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as d3 from 'd3';
 import { GraphNode, GraphLink, AgentFile } from '../types';
 
@@ -13,7 +13,14 @@ interface GraphViewProps {
 export const GraphView: React.FC<GraphViewProps> = ({ nodes, links, onNodeClick, selectedPath, activeMode }) => {
   const svgRef = useRef<SVGSVGElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
+  const nodesRef = useRef<GraphNode[]>(nodes);
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
+
+  // Keep nodes ref updated
+  useEffect(() => {
+    nodesRef.current = nodes;
+  }, [nodes]);
 
   // Handle resize
   useEffect(() => {
@@ -25,12 +32,46 @@ export const GraphView: React.FC<GraphViewProps> = ({ nodes, links, onNodeClick,
         });
       }
     };
-    
+
     window.addEventListener('resize', handleResize);
     handleResize();
-    
+
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  // Center on selected node
+  const centerOnNode = useCallback((nodeId: string) => {
+    if (!svgRef.current || !zoomRef.current) return;
+
+    const node = nodesRef.current.find(n => n.id === nodeId);
+    if (!node || node.x === undefined || node.y === undefined) return;
+
+    const svg = d3.select(svgRef.current);
+    const { width, height } = dimensions;
+
+    // Calculate transform to center on node
+    const scale = 1.2;
+    const x = width / 2 - node.x * scale;
+    const y = height / 2 - node.y * scale;
+
+    svg.transition()
+      .duration(500)
+      .call(
+        zoomRef.current.transform,
+        d3.zoomIdentity.translate(x, y).scale(scale)
+      );
+  }, [dimensions]);
+
+  // Center on selected node when selectedPath changes
+  useEffect(() => {
+    if (selectedPath) {
+      // Small delay to ensure node positions are updated
+      const timer = setTimeout(() => {
+        centerOnNode(selectedPath);
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [selectedPath, centerOnNode]);
 
   // D3 Simulation
   useEffect(() => {
@@ -40,7 +81,7 @@ export const GraphView: React.FC<GraphViewProps> = ({ nodes, links, onNodeClick,
     svg.selectAll("*").remove(); // Clear previous
 
     const { width, height } = dimensions;
-    
+
     // Zoom behavior
     const g = svg.append("g");
     const zoom = d3.zoom<SVGSVGElement, unknown>()
@@ -50,6 +91,7 @@ export const GraphView: React.FC<GraphViewProps> = ({ nodes, links, onNodeClick,
       });
 
     svg.call(zoom);
+    zoomRef.current = zoom;
 
     // Force Simulation
     const simulation = d3.forceSimulation(nodes)
@@ -73,7 +115,7 @@ export const GraphView: React.FC<GraphViewProps> = ({ nodes, links, onNodeClick,
     svg.append("defs").append("marker")
       .attr("id", "arrowhead")
       .attr("viewBox", "0 -5 10 10")
-      .attr("refX", 28) 
+      .attr("refX", 28)
       .attr("refY", 0)
       .attr("markerWidth", 6)
       .attr("markerHeight", 6)
@@ -105,7 +147,7 @@ export const GraphView: React.FC<GraphViewProps> = ({ nodes, links, onNodeClick,
         if (d.id === selectedPath) return "#3b82f6"; // Blue (Selected)
         // Highlight based on mode
         if (d.name === activeMode) {
-            return activeMode === 'CLAUDE.md' ? "#ec4899" : "#a855f7"; 
+            return activeMode === 'CLAUDE.md' ? "#ec4899" : "#a855f7";
         }
         return "#1f2937"; // Gray (Standard File)
       })
@@ -158,8 +200,8 @@ export const GraphView: React.FC<GraphViewProps> = ({ nodes, links, onNodeClick,
       d.fx = null;
       d.fy = null;
     }
-    
-  }, [nodes, links, dimensions, selectedPath, onNodeClick, activeMode]);
+
+  }, [nodes, links, dimensions, onNodeClick, activeMode]);
 
   return (
     <div ref={wrapperRef} className="w-full h-full relative overflow-hidden">
